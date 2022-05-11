@@ -1,0 +1,338 @@
+---
+title: "5550 Project"
+author: "Ryan Ulring"
+date: "4/22/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# i. Introduction
+
+  The data I will be using for this analysis contains the U.S. city average consumer price index (CPI) for all urban consumers, excluding food and energy, from January 2011 to February 2021. I found this data from the U.S. Bureau of Labor Statistics, with a series id of "CUUR0000SA0L1E" and a series title of "All items less food and energy in U.S. city average, all urban consumers, not seasonally adjusted." The goal of this analysis is to find an appropriate model that fits the data well.
+  
+  In the first plot below, there is a clear upward trend in the average consumer price index over time. Based on this plot, the trend also appears to be fairly linear. There is also a seasonal trend in the data, which is hard to picture, so I plotted the differenced data in the second plot below in order to show the seasonal trend. In the differenced plot, we can more clearly see the seasonal trend that appears throughout the data, and it does not seem to have a specific parametric form. Since there appears to be a linear trend in the data, and since the seasonal component does not appear to have a specific parametric form, I believe that a seasonal means model with a linear trend is an appropriate model here.
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.width=8, fig.height=5}
+par(mfrow = c(2, 1))
+library(readr)
+library(astsa)
+library(ggplot2)
+options(scipen=999)
+options(digits=22)
+
+# read in data
+CPI_AILFE <- ts(read_csv("CPI_AILFE.csv"), start = 2011, frequency = 12)
+
+# plot data
+plot(CPI_AILFE, xlab = "Year", ylab = "Avg CPI", main = "U.S. City Avg CPI for All Urban Consumers, Excluding Food & Energy")
+
+# plot differences to show seasonality
+plot(diff(CPI_AILFE), xlab = "Year", ylab = "Differenced Avg CPI", main = "Differenced Data")
+```
+
+# ii. Models for Trend and Seasonality
+
+For this next part of my analysis I will explicitly estimate the trend and seasonal components, detrend and deasonalize the data, and use ARMA modeling techniques to analyze the detrended, deseasonalized data. 
+
+First, I will look at the detrended, deseasonalized data assuming a seasonal means model with a linear trend, in order to make sure this model removes the trend from the data.
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=8}
+# create factor variable for months
+M = factor(rep(month.abb, length.out = length(CPI_AILFE)), levels = month.abb)
+
+# create sm model with lin trend
+sm.model.1 <- lm(CPI_AILFE ~ time(CPI_AILFE) + M + 0)
+
+# plot the detrended data and acf
+par(mfrow = c(1, 2))
+detrended = CPI_AILFE - predict(sm.model.1, newdata = time(CPI_AILFE))
+plot(detrended, ylab="", main="Detrended, Deseasonalized Data", xlab = "Year")
+abline(h=0, lty=3)
+acf(detrended, 24, main="Detrended, Deseasonalized Data")
+```
+
+For this series, there does appear to be a noticeable pattern(mean does not appear to be constant), so this model is probably not appropriate. Also, the sample acf plot does not decay rapidly, which is further evidence that this model is not appropriate. Since this detrended, deseasonalized data has somewhat of a U-shaped pattern, I will next look at the detrended, deseasonalized data assuming a seasonal means model with a quadratic trend.
+  
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=8}
+# create sm model with quadratic trend
+sm.model.2 <- lm(CPI_AILFE ~ time(CPI_AILFE) + I(time(CPI_AILFE)^2) + M + 0)
+
+# plot the detrended data and acf
+par(mfrow = c(1, 2))
+detrended = CPI_AILFE - predict(sm.model.2, newdata = time(CPI_AILFE))
+plot(detrended, ylab="", main="Detrended, Deseasonalized Data", xlab = "Year")
+abline(h=0, lty=3)
+acf(detrended, 24, main="Detrended, Deseasonalized Data")
+```
+  
+Here, we can see that there is now no noticeable pattern in the detrended, deseasonalized data(mean and variance appear to be fairly constant). In addition to this, the sample acf plot seems to decay fairly rapidly, so this may be a good model to use. Since it appears that this model has successfully removed the trend in the data, and the detrended, deseasonalized data appears to be relatively stationary, so I will continue with this model.
+
+Next, I will look at ARMA models to analyze the detrended, deseasonalized data. In order to get an idea of what ARMA models I should consider, I will look at the sample acf and pacf plots of the detrended, deseasonalized data. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.height=3, fig.width=8}
+par(mfrow = c(1, 2))
+
+# plot acf and pacf of detrended data
+acf(detrended, 24, main="Detrended, Deseasonalized Data")
+pacf(detrended, 24, main="Detrended, Deseasonalized Data")
+```
+
+From the sample acf plot, it appears that the acf tails off. The sample pacf plot shows us that the pacf appears to either be cut off after the first few lags, which indicates an AR model, so I will try to fit AR(2), AR(3), and AR(4) models to the detrended, deseasonalized data. First I will look at the fit for the AR(2) model.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# create the ar2 model
+ar2.model <- arima(detrended, order = c(2, 0, 0), method = "ML", include.mean = FALSE)
+
+# get plots and box-test for analysis
+par(mfrow=c(2,2))
+plot(ar2.model$residuals, type="l", xlab="Year", ylab="AR2 residuals")
+abline(h=0, lty=3)
+acf(ar2.model$residuals, 24, main = "")
+pacf(ar2.model$residuals, 24, main = "")
+qqnorm(ar2.model$residuals, main = "")
+qqline(ar2.model$residuals)
+Box.test(ar2.model$residuals, lag=24, type="Ljung-Box")
+```
+
+For this model, the residuals do appear like they could be white noise, the acf and pacf plots do not have many lags outside of the significance threshold, and the QQ-plot seems to fit well; however, the p-value for the Ljung-Box test is small, which indicates that this series is not white noise. Next I will look at the fit for the AR(3) model.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# create ar3 model
+ar3.model <- arima(detrended, order = c(3, 0, 0), method = "ML", include.mean = FALSE)
+
+# get plots and box-test for analysis
+par(mfrow=c(2,2))
+plot(ar3.model$residuals, type="l", xlab="Year", ylab="AR3 residuals")
+abline(h=0, lty=3)
+acf(ar3.model$residuals, 24, main = "")
+pacf(ar3.model$residuals, 24, main = "")
+qqnorm(ar3.model$residuals, main = "")
+qqline(ar3.model$residuals)
+Box.test(ar3.model$residuals, lag=24, type="Ljung-Box")
+```
+
+For this model, the residuals do appear like they could be white noise, the acf and pacf plots do not have many lags outside of the significance threshold, the QQ-plot seems to fit well, and the p-value for the Ljung-Box test is pretty large. With this information, it is certainly possible that this series is white noise. Next I will look at the fit for the AR(4) model.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# create ar4 model
+ar4.model <- arima(detrended, order = c(4, 0, 0), method = "ML", include.mean = FALSE)
+
+# get plots and box-test for analysis
+par(mfrow=c(2,2))
+plot(ar4.model$residuals, type="l", xlab="Year", ylab="AR4 residuals")
+abline(h=0, lty=3)
+acf(ar4.model$residuals, 24, main = "")
+pacf(ar4.model$residuals, 24, main = "")
+qqnorm(ar4.model$residuals, main = "")
+qqline(ar4.model$residuals)
+Box.test(ar4.model$residuals, lag=24, type="Ljung-Box")
+```
+
+Again, for this model, the residuals do appear like they could be white noise, the acf and pacf plots do not have many lags outside of the significance threshold, the QQ-plot seems to fit well, and the p-value for the Ljung-Box test is pretty large. With this information, it is certainly possible that this series is white noise. Next I will compare the AIC's for the three AR models and choose which model I think is best for this data.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# output AIC's for each model
+aics <- c(ar2.model$aic, ar3.model$aic, ar4.model$aic)
+names(aics) <- c("AR(2)", "AR(3)", "AR(4)")
+aics
+```
+Since the AR(3) model has the lowest AIC, I will use this model. My final model is a seasonal means model with a quadratic trend plus an AR(3) stationary process. Here is the estimated model:
+
+$y_t$ = `r sm.model.2$coefficients[[1]]`t + `r sm.model.2$coefficients[[2]]`$t^2$ + $\hat{s}_{month}$ + $x_t$, $x_t$ = `r ar3.model$coef[[1]]`$x_{t-1}$ + `r ar3.model$coef[[2]]`$x_{t-2}$ + `r ar3.model$coef[[3]]`$x_{t-3}$ + $w_t$, $w_t\sim^{iid}$N(0,`r ar3.model$sigma2`), where the estimated seasonal effects ($\hat{s}_{month}$) are $\hat{s}_{jan}=$ `r sm.model.2$coefficients[[3]]`, $\hat{s}_{feb}=$ `r sm.model.2$coefficients[[4]]`, $\hat{s}_{mar}=$ `r sm.model.2$coefficients[[5]]`, $\hat{s}_{apr}=$ `r sm.model.2$coefficients[[6]]`, $\hat{s}_{may}=$ `r sm.model.2$coefficients[[7]]`, $\hat{s}_{jun}=$ `r sm.model.2$coefficients[[8]]`, $\hat{s}_{jul}=$ `r sm.model.2$coefficients[[9]]`, $\hat{s}_{aug}=$ `r sm.model.2$coefficients[[10]]`, $\hat{s}_{sep}=$ `r sm.model.2$coefficients[[11]]`, $\hat{s}_{oct}=$ `r sm.model.2$coefficients[[12]]`, $\hat{s}_{nov}=$ `r sm.model.2$coefficients[[13]]`, $\hat{s}_{dec}=$ `r sm.model.2$coefficients[[14]]`
+
+The seasonal effects and the quadratic trend were calculated in R using the lm() function with a factor for the month.
+
+Next, I am going to forecast the original data out several time periods, using my model, and provide prediction intervals. Here is the original data with a two year forecast and the 95% prediction interval superimposed:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.height=4}
+# set the number of months at 24
+nmonths = 24
+
+# I was having trouble forecasting with the seasonal means model,
+# so I made this loop to calculate the seasonal effects I need
+# for forecasting
+fut.seas.effects <- 0
+for(i in 1:24) {
+  if(4 + i <= length(sm.model.2$coefficients)) {
+    fut.seas.effects[i] <- sm.model.2$coefficients[[4 + i]]
+  } else if(4 + i > length(sm.model.2$coefficients) && 4 + i - 12 <= length(sm.model.2$coefficients)) {
+    fut.seas.effects[i] <- sm.model.2$coefficients[[4 + i - 12]]
+  } else {
+    fut.seas.effects[i] <- sm.model.2$coefficients[[4 + i - 24]]
+  }
+}
+
+# get forecasts from ar model
+CPI_AILFE.forecast <- predict(ar3.model, nmonths)
+
+## get future time values
+future = 2021 + 2 / 12 + (0:(nmonths-1))/12
+
+# calculate total forecasts
+forecasts = sm.model.2$coefficients[[1]] * future + sm.model.2$coefficients[[2]] * future^2 + fut.seas.effects + CPI_AILFE.forecast$pred
+
+# get prediction error
+margin = 1.96 * CPI_AILFE.forecast$se
+
+# calculate intervals
+pred.lower = forecasts - margin
+pred.upper = forecasts + margin
+
+# set the minimum time
+yrmin = 2011
+
+# plot original data
+plot(CPI_AILFE, type="l", xlim=c(yrmin, max(future)), ylim=c(220, 290), xlab="Year", ylab="Avg CPI", main = "Forecast")
+
+# add lines for the forecast and prediction interval
+lines(future, forecasts, col = "blue")
+lines(future, pred.lower, col = "red", lty=2)
+lines(future, pred.upper, col = "red", lty=2)
+```
+
+# iii. SARIMA Modeling
+
+In the next part of my analysis, I will handle the trend and seasonal components by appropriately differencing the data and fitting an appropriate SARIMA model. First I will difference the deseasonalized data and look at the resulting plots so I can fit appropriate SARIMA models.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, fig.height=2, fig.width=8}
+# deseasonalize and difference data
+deseas <- diff(CPI_AILFE, lag = 12)
+deseas.dif <- diff(deseas)
+par(mfrow = c(1, 3))
+
+# plot the deseasonalized and differenced data and the acf/pacf plots
+plot(deseas.dif, ylab = "dif. deseas.", xlab = "Year")
+acf(deseas.dif, 36, main = "")
+pacf(deseas.dif, 36, main = "")
+```
+
+The trend appears to be removed, so I will continue with finding SARIMA models to fit. Within seasons, the acf plot seems to decay somewhat geometrically and the pacf plot appears to cut off after the first few lags. Between seasons the acf plot looks like it cuts off while the pacf plot seems like it could be geometrically declining. With this information I will try to fit ARIMA(2,1,0)x$(0,1,1)_{12}$, ARIMA(3,1,0)x$(0,1,1)_{12}$, and ARIMA(4,1,0)x$(0,1,1)_{12}$ models to the data. First I will look at the fit for the ARIMA(2,1,0)x$(0,1,1)_{12}$ model.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# get arima210011 model
+arima210011.model <- arima(CPI_AILFE, order = c(2, 1, 0), seasonal = list(order = c(0,1,1), period = 12))
+
+# get plots and box-test for analysis
+par(mfrow=c(2,2))
+plot(arima210011.model$residuals, type="l", xlab="Year", ylab="ARIMA210 residuals")
+abline(h=0, lty=3)
+acf(arima210011.model$residuals, 24, main = "")
+pacf(arima210011.model$residuals, 24, main = "")
+qqnorm(arima210011.model$residuals, main = "")
+qqline(arima210011.model$residuals)
+Box.test(arima210011.model$residuals, lag=24, type="Ljung-Box")
+```
+
+For this model, the residuals appear like they could be white noise, the acf and pacf plots do not have many lags outside of the significance threshold, the QQ-plot fits well, and the p-value for the Ljung-Box test is large. With this information, it is certainly possible that this series is white noise. Next I will look at the fit for the ARIMA(3,1,0)$x(0,1,1)_{12}$ model.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# get arima310011 model
+arima310011.model <- arima(CPI_AILFE, order = c(3, 1, 0), seasonal = list(order = c(0,1,1), period = 12))
+
+# get plots and box-test for analysis
+par(mfrow=c(2,2))
+plot(arima310011.model$residuals, type="l", xlab="Year", ylab="ARIMA310 residuals")
+abline(h=0, lty=3)
+acf(arima310011.model$residuals, 24, main = "")
+pacf(arima310011.model$residuals, 24, main = "")
+qqnorm(arima310011.model$residuals, main = "")
+qqline(arima310011.model$residuals)
+Box.test(arima310011.model$residuals, lag=24, type="Ljung-Box")
+```
+
+Again, the residuals appear like they could be white noise, the acf and pacf plots do not have many lags outside of the significance threshold, the QQ-plot fits well, and the p-value for the Ljung-Box test is large. With this information, it is certainly possible that this series is white noise. Next I will look at the fit for the ARIMA(4,1,0)$x(0,1,1)_{12}$ model.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# get arima410011 model
+arima410011.model <- arima(CPI_AILFE, order = c(4, 1, 0), seasonal = list(order = c(0,1,1), period = 12))
+
+# get plots and box-test for analysis
+par(mfrow=c(2,2))
+plot(arima410011.model$residuals, type="l", xlab="Year", ylab="ARIMA310 residuals")
+abline(h=0, lty=3)
+acf(arima410011.model$residuals, 24, main = "")
+pacf(arima410011.model$residuals, 24, main = "")
+qqnorm(arima410011.model$residuals, main = "")
+qqline(arima410011.model$residuals)
+Box.test(arima410011.model$residuals, lag=24, type="Ljung-Box")
+```
+
+Yet again, the residuals appear like they could be white noise, the acf and pacf plots do not have many lags outside of the significance threshold, the QQ-plot fits well, and the p-value for the Ljung-Box test is large. With this information, it is certainly possible that this series is white noise. Next I will compare the AIC's for the three SARIMA models and choose which model I think is best for this data.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# get AIC's for each model
+aics <- c(arima210011.model$aic, arima310011.model$aic, arima410011.model$aic)
+names(aics) <- c("ARIMA(2,1,0)x(0,1,1)", "ARIMA(3,1,0)x(0,1,1)", "ARIMA(4,1,0)x(0,1,1)")
+aics
+```
+Since the ARIMA(3,1,0)x$(0,1,1)_{12}$ model has the lowest AIC, I will use this model as my final model. Here is the fitted model:
+
+(1-(`r arima310011.model$coef[[1]]` $B$)-(`r arima310011.model$coef[[2]]` $B^2$)-(`r arima310011.model$coef[[3]]` $B^3$))$\nabla(\nabla_{12}x_t)$=(1+`r arima310011.model$coef[[4]]` $B^{12}$)$w_t$, $w_t\sim$wn(0,`r arima310011.model$sigma2`)
+
+Next, I am going to forecast the original data out several time periods, using my model, and provide prediction intervals. Here is the original data with a two year forecast and prediction interval superimposed:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE, results='hide', fig.height=3}
+# get and plot the SARIMA model forecast
+sarima.for(CPI_AILFE, 24, 3, 1, 0, 0, 1, 1, 12)
+```
+
+# iv. Model Comparison
+
+Now I am going to compare the models I chose in part ii nd part iii. Here are the models superimposed on the original data and their corresponding residual plots:
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+# get both models
+model.1 <- predict(sm.model.2) + detrended - ar3.model$residuals
+model.2 <- CPI_AILFE - arima310011.model$residuals
+
+# plot models and residuals for comparison
+par(mfrow = c(2, 2))
+plot(CPI_AILFE, ylab = "Avg CPI", main = "Seasonal means model")
+lines(model.1, col = "red")
+plot(CPI_AILFE, ylab = "Avg CPI", main = "SARIMA model")
+lines(model.1, col = "blue")
+plot(CPI_AILFE-model.1, ylab = "Residuals", xlab = "Year", main = "Seasonal means model")
+plot(CPI_AILFE-model.2, ylab = "Residuals", xlab = "Year", main = "SARIMA model")
+```
+
+When looking at the models, we can see that the plots of the models are hard to tell apart because they fit the data in a similar fashion. The residual plots also look similar (although not as similar as the plots of the models), but when looking closely it seems as though the residuals for the seasonal means model may be slightly smaller. Also, the AR(3) model for the detrended data has a smaller AIC than the ARIMA(3,1,0)x$(0,1,1)_12$ model.
+
+# v. Conclusions
+
+Since I believe the residuals for the seasonal means model may be slightly smaller, since the AIC was smaller, and because the data seems to be dominated by a trend that I easily modeled with this method, I believe that the seasonal means model with a quadratic trend that I fit in part ii is the best model. One last thing I would like to note about this analysis, is that there seems to be a dip and spike for some of my plots during 2020. I believe this is due to the COVID-19 pandemic, which was why I was not too worried about this while I was modeling the data.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
